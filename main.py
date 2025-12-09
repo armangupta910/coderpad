@@ -102,15 +102,15 @@ async def create_redis_client():
     )
 
 async def save_room_to_redis(r: Room):
-    key = REDIS_ROOM_KEY.format(r.room_code)
-    payload = json.dumps(room_to_dict(r))
+    key = REDIS_ROOM_KEY.format(r.room_code) # key = room:ABC123
+    payload = json.dumps(room_to_dict(r)) # value = Room class object
     await redis_client.set(key, payload)
     # set expiry
     await redis_client.expireat(key, int(r.expires_at.timestamp()))
     return True
 
 async def fetch_room_from_redis(room_code: str) -> Optional[Room]:
-    key = REDIS_ROOM_KEY.format(room_code)
+    key = REDIS_ROOM_KEY.format(room_code) # key = room:ABC123
     raw = await redis_client.get(key)
     if raw is None:
         return None
@@ -135,9 +135,9 @@ async def update_room_code_with_version(room_code: str, new_code: str, expected_
                     return False, "room-not-found", None
                 data = json.loads(raw)
                 current_version = data.get("version", 0)
-                if current_version != expected_version:
-                    await pipe.unwatch()
-                    return False, "version-mismatch", current_version
+                # if current_version != expected_version:
+                #     await pipe.unwatch()
+                #     return False, "version-mismatch", current_version
                 # mutate
                 data["code"] = new_code
                 data["version"] = current_version + 1
@@ -160,7 +160,7 @@ async def update_room_code_with_version(room_code: str, new_code: str, expected_
 
 # participant helper
 async def add_participant_to_room(room_code: str, participant: Participant):
-    room = await fetch_room_from_redis(room_code)
+    room = await fetch_room_from_redis(room_code) # Again Fetching from Resis
     if room is None:
         return False, "room-not-found", None
     if room.participants_count >= room.max_participants:
@@ -389,6 +389,7 @@ async def list_rooms():
 @app.websocket("/ws/rooms/{room_code}")
 async def websocket_endpoint(websocket: WebSocket, room_code: str):
     await websocket.accept()
+    print("Web Socket connection accepted - ", str(websocket))
     room = await fetch_room_from_redis(room_code)
     if not room:
         await websocket.send_json({"type": "ERROR", "message": "Room not found"})
@@ -416,7 +417,7 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str):
             return
 
         # Check if participant exists in Redis; if not, add (auto-join)
-        current_room = await fetch_room_from_redis(room_code)
+        current_room = await fetch_room_from_redis(room_code) # Fetching the room secind time, even if you fetched it already above, why not reuse it?
         if participant_id not in current_room.participants:
             if current_room.participants_count >= current_room.max_participants:
                 await websocket.send_json({"type": "ERROR", "message": "Room is full"})
@@ -456,32 +457,37 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str):
 
         await broadcast({"type": "PARTICIPANT_JOINED", "clientId": client_id, "participantCount": current_room.participants_count}, exclude_client=client_id)
 
+        import time
+
         # Listen loop
         while True:
             message = await websocket.receive_json()
             message_type = message.get("type")
 
             if message_type == "EDIT":
+                start = time.perf_counter()   # ⏱ Start timing
                 new_code = message.get("code")
                 expected_version = message.get("expected_version", current_room.version)
                 if new_code is None:
                     continue
+
                 ok, reason, new_version_or_current = await update_room_code_with_version(room_code, new_code, expected_version)
-                if not ok:
-                    # send version mismatch info back
-                    await websocket.send_json({"type": "ERROR", "message": reason, "current_version": new_version_or_current})
-                else:
-                    # success: update current_room var and broadcast patch
-                    current_room = await fetch_room_from_redis(room_code)
-                    await broadcast({
-                        "type": "PATCH",
-                        "code": current_room.code,
-                        "version": current_room.version,
+                current_room = await fetch_room_from_redis(room_code)
+                end1 = time.perf_counter()
+                # print(f"[Redis Write block executed in {end1 - start:.6f} seconds]")
+                await broadcast({
+                    "type": "PATCH",
+                    "code": current_room.code,
+                    "version": current_room.version,
                         "clientId": client_id
                     }, exclude_client=client_id)
+            
+                end = time.perf_counter()     # ⏱ End timing
+                # print(f"[Broadcast block executed in {end - end1:.6f} seconds]")
 
             elif message_type == "CURSOR":
                 # broadcast cursor update
+                print("cursor position received - ", str(message.get("position")), client_id)
                 await broadcast({
                     "type": "CURSOR",
                     "clientId": client_id,
