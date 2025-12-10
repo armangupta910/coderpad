@@ -248,7 +248,9 @@ async def create_room(max_participants: int, request: CreateRoomRequest):
 
 @app.get("/rooms/{room_code}/status", response_model=RoomStatusResponse)
 async def get_room_status(room_code: str):
+    print("Trying to get room status")
     room = await fetch_room_from_redis(room_code)
+    print("Room Status - " + str(room))
     if not room:
         return RoomStatusResponse(
             exists=False,
@@ -474,7 +476,7 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str):
                 ok, reason, new_version_or_current = await update_room_code_with_version(room_code, new_code, expected_version)
                 current_room = await fetch_room_from_redis(room_code)
                 end1 = time.perf_counter()
-                # print(f"[Redis Write block executed in {end1 - start:.6f} seconds]")
+                print(f"[Redis Write block executed in {end1 - start:.6f} seconds]")
                 await broadcast({
                     "type": "PATCH",
                     "code": current_room.code,
@@ -483,7 +485,7 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str):
                     }, exclude_client=client_id)
             
                 end = time.perf_counter()     # ⏱ End timing
-                # print(f"[Broadcast block executed in {end - end1:.6f} seconds]")
+                print(f"[Broadcast block executed in {end - end1:.6f} seconds]")
 
             elif message_type == "CURSOR":
                 # broadcast cursor update
