@@ -6,3 +6,4 @@ certifi
 python-dotenv>=1.0
 httpx>=0.24
 typing-extensions>=4.0
+requests
