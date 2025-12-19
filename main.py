@@ -282,29 +282,93 @@ async def leave_room(room_code: str, request: LeaveRoomRequest):
 async def run_code(room_code: str, request: RunCodeRequest):
     room = await fetch_room_from_memory(room_code)
     if not room:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Room not found")
+        raise HTTPException(status_code=404, detail="Room not found")
+
     code = request.code if request.code is not None else room.code
-    # simulate execution
-    import time, sys
+    language = (request.language or "python").lower()
+    input_data = request.input or ""
+
+    if language == "python":
+        return run_python(code, input_data)
+
+    if language in ("cpp", "c++"):
+        return run_cpp_judge0(code, input_data)
+
+    raise HTTPException(status_code=400, detail="Unsupported language")
+
+
+def run_python(code: str, input_data: str):
+    import sys, time
     from io import StringIO
 
     stdout_capture = StringIO()
     stderr_capture = StringIO()
     exit_code = 0
-    start_time = time.time()
+
+    start = time.time()
     try:
-        old_stdout, old_stderr = sys.stdout, sys.stderr
+        old_stdout, old_stderr, old_stdin = sys.stdout, sys.stderr, sys.stdin
         sys.stdout, sys.stderr = stdout_capture, stderr_capture
+        sys.stdin = StringIO(input_data)
+
         exec(code, {"__name__": "__main__"})
     except Exception as e:
-        stderr_capture.write(f"{type(e).__name__}: {str(e)}")
+        stderr_capture.write(f"{type(e).__name__}: {e}")
         exit_code = 1
     finally:
-        sys.stdout, sys.stderr = old_stdout, old_stderr
+        sys.stdout, sys.stderr, sys.stdin = old_stdout, old_stderr, old_stdin
 
-    end_time = time.time()
-    execution_time_ms = int((end_time - start_time) * 1000)
-    return RunCodeResponse(stdout=stdout_capture.getvalue(), stderr=stderr_capture.getvalue(), exitCode=exit_code, timeMs=execution_time_ms)
+    return RunCodeResponse(
+        stdout=stdout_capture.getvalue(),
+        stderr=stderr_capture.getvalue(),
+        exitCode=exit_code,
+        timeMs=int((time.time() - start) * 1000),
+    )
+
+import requests
+import base64
+import time
+
+JUDGE0_CE_URL = "https://ce.judge0.com/submissions"
+
+
+def run_cpp_judge0(code: str, input_data: str):
+    start = time.time()
+
+    payload = {
+        "language_id": 54,  # C++ (GCC 9.2.0)
+        "source_code": base64.b64encode(code.encode()).decode(),
+        "stdin": base64.b64encode(input_data.encode()).decode(),
+    }
+
+    response = requests.post(
+        f"{JUDGE0_CE_URL}?base64_encoded=true&wait=true",
+        json=payload,
+        timeout=15,
+    )
+
+    result = response.json()
+
+    stdout = base64.b64decode(result.get("stdout") or b"").decode()
+    stderr = base64.b64decode(result.get("stderr") or b"").decode()
+    compile_output = base64.b64decode(result.get("compile_output") or b"").decode()
+
+    exit_code = 0
+    error_output = ""
+
+    if compile_output:
+        exit_code = 1
+        error_output = compile_output
+    elif stderr:
+        exit_code = 1
+        error_output = stderr
+
+    return RunCodeResponse(
+        stdout=stdout,
+        stderr=error_output,
+        exitCode=exit_code,
+        timeMs=int((time.time() - start) * 1000),
+    )
 
 
 @app.delete("/rooms/{room_code}")
